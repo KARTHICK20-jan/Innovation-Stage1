@@ -426,7 +426,9 @@ def build_full_platform_dashboard(df: pd.DataFrame) -> str:
                 ondc_vs_target = f"{ondc_p:.0f}% / {ondc_target}%"
                 ret_vs_target  = f"{ret_a:.1f}% / {ret_target}%"
 
-                delta_html = f'<span style="color:{"#27ae60" if ret_delta>0 else "#e74c3c"};font-size:10px;font-weight:700">{"▼" if ret_delta>0 else "▲"}{abs(ret_delta):.1f}%</span>'
+                _d_arrow = "▼" if ret_delta>0 else "▲"
+                _d_color = "#27ae60" if ret_delta>0 else "#e74c3c"
+                delta_html = f'<span style="color:{_d_color};font-size:10px;font-weight:700">{_d_arrow}{abs(ret_delta):.1f}%</span>'
 
                 table_rows += f"""<tr style="border-bottom:1px solid rgba(255,255,255,.06)">
   <td style="padding:11px 14px;font-weight:700;color:white;white-space:nowrap">{state_name}</td>
@@ -1812,7 +1814,7 @@ def generate_insights(user_data, df_raw, lang='en'):
   <div style="background:rgba(255,255,255,0.06);border-radius:6px;padding:7px 11px">
     <div style="font-size:9px;color:#7AABDD;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">Total Revenue</div>
     <div style="font-size:12px;font-weight:700;color:#FFFFFF">{_fmt_inr_sb(total_sales)}</div>
-    <div style="font-size:10px;color:#A8C8E8;margin-top:1px">{total_records:,} records · {total_products:,} SKU{"s" if total_products!=1 else ""}</div>
+    <div style="font-size:10px;color:#A8C8E8;margin-top:1px">{total_records:,} records · {total_products:,} SKU{'s' if total_products!=1 else ''}</div>
   </div>
 </div>
 </div>"""
@@ -1833,9 +1835,10 @@ def generate_insights(user_data, df_raw, lang='en'):
         hlt_acc = 'green' if health_score>=65 else ('amber' if health_score>=40 else 'red')
         prf_acc = 'green' if perf_score>=65 else ('amber' if perf_score>=40 else 'red')
         prf_lbl = 'Excellent' if perf_score>=65 else ('Moderate' if perf_score>=40 else 'Low')
+        _sku_s = 's' if total_products != 1 else ''
         html += f"""<div class="sb-card-grid">
 {_kpi_card('blue', '💰', 'Total Revenue', _fmt_inr_sb(total_sales), '<div style="font-size:11px;color:#4A6A8A;margin-top:4px">Gross Sales (all products)</div>')}
-{_kpi_card('navy', '📦', 'Data Records', f'{total_records:,}', f'<div style="font-size:11px;color:#4A6A8A;margin-top:4px">{total_products:,} unique SKU{"s" if total_products!=1 else ""}</div>')}
+{_kpi_card('navy', '📦', 'Data Records', f'{total_records:,}', f'<div style="font-size:11px;color:#4A6A8A;margin-top:4px">{total_products:,} unique SKU{_sku_s}</div>')}
 {_kpi_card(mc_acc, '📈', 'Avg Profit Margin', f'{avg_margin:.1f}%', f'<span class="sb-status-badge {mc}" style="margin-top:8px">{ml}</span>')}
 {_kpi_card(hlt_acc, '🧠', 'MSME Health Score', f'{health_score:.1f}%', f'<span class="sb-status-badge {_health_cls(health_score)}" style="margin-top:8px">{_health_lbl(health_score)}</span>')}
 {_kpi_card(prf_acc, '⭐', 'Performance Score', f'{perf_score:.1f}%', f'<span class="sb-status-badge {_health_cls(perf_score)}" style="margin-top:8px">{prf_lbl}</span>')}
@@ -1925,7 +1928,7 @@ def generate_insights(user_data, df_raw, lang='en'):
 <div style="margin:12px 48px 0;padding:14px 22px;background:linear-gradient(90deg,#EBF4FF,#F5F0FF);border-radius:10px;border-left:4px solid #1B4F8A;display:grid;grid-template-columns:repeat(4,1fr);gap:0;align-items:center;">
   <div style="padding-right:20px;border-right:1px solid #C8DCEF">
     <span style="font-size:10px;color:#4A6A8A;text-transform:uppercase;letter-spacing:1px;font-weight:600;display:block;margin-bottom:4px">Expected Revenue Growth</span>
-    <span style="font-size:14px;font-weight:800;color:{"#1a7a40" if forecast_growth_rate and forecast_growth_rate >= 0 else "#b03030"}">{(f"{forecast_growth_rate:+.1f}% annually" if forecast_growth_rate is not None else "—")}</span>
+    <span style="font-size:14px;font-weight:800;color:{'#1a7a40' if forecast_growth_rate and forecast_growth_rate >= 0 else '#b03030'}">{(f"{forecast_growth_rate:+.1f}% annually" if forecast_growth_rate is not None else "—")}</span>
   </div>
   <div style="padding:0 20px;border-right:1px solid #C8DCEF">
     <span style="font-size:10px;color:#4A6A8A;text-transform:uppercase;letter-spacing:1px;font-weight:600;display:block;margin-bottom:4px">Peak Demand Expected</span>
@@ -2256,7 +2259,7 @@ def generate_insights(user_data, df_raw, lang='en'):
             f'<div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid {_snp_trend_col}">'
             '<div style="font-size:10px;color:#4A6A8A;text-transform:uppercase;letter-spacing:0.8px">Revenue Trend (6-Month)</div>'
             f'<div style="font-size:15px;font-weight:700;color:{_snp_trend_col};margin-top:2px">{_snp_growth_rate:+.1f}%</div>'
-            f'<div style="font-size:10px;color:#4A6A8A">Forecast vs trailing 6 months{" · " + _snp_peak_month if _snp_peak_month else ""}</div>'
+            f'<div style="font-size:10px;color:#4A6A8A">Forecast vs trailing 6 months{_snp_sep}</div>'
             '</div>'
             '<div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #8b5cf6">'
             '<div style="font-size:10px;color:#4A6A8A;text-transform:uppercase;letter-spacing:0.8px">Forecast Model</div>'
@@ -2365,7 +2368,7 @@ def generate_insights(user_data, df_raw, lang='en'):
     </div>
     <div class="sb-opp-metric-row">
       <span class="sb-opp-metric-label">Margin Gap</span>
-      <span class="sb-opp-metric-value" style="color:{"#E05252" if _margin_gap>0 else "#2ECC8F"}">{f"+{_margin_gap:.1f}pp needed" if _margin_gap>0 else "✓ Above target"}</span>
+      <span class="sb-opp-metric-value" style="color:{'#E05252' if _margin_gap>0 else '#2ECC8F'}">{f"+{_margin_gap:.1f}pp needed" if _margin_gap>0 else "✓ Above target"}</span>
     </div>
     <div class="sb-opp-metric-row">
       <span class="sb-opp-metric-label">💵 Profit Upside</span>
@@ -2386,9 +2389,9 @@ def generate_insights(user_data, df_raw, lang='en'):
 
 <!-- Widget 2: Inventory Risk -->
 <div class="sb-opp-card">
-  <div style="height:4px;background:linear-gradient(90deg,{"#E05252,#B03030" if _avg_ret_w2>=7 else ("#E8A838,#B07800" if _avg_ret_w2>=4 else "#2ECC8F,#1B9E6E")})"></div>
+  <div style="height:4px;background:linear-gradient(90deg,{'#E05252,#B03030' if _avg_ret_w2>=7 else ('#E8A838,#B07800' if _avg_ret_w2>=4 else '#2ECC8F,#1B9E6E')})"></div>
   <div class="sb-opp-card-header">
-    <div class="sb-opp-icon" style="background:linear-gradient(135deg,{"#FDE8E8,#F5C0C0" if _avg_ret_w2>=7 else ("#FEF6E7,#FDEBC0" if _avg_ret_w2>=4 else "#E8FBF4,#C3F0DF")})">📦</div>
+    <div class="sb-opp-icon" style="background:linear-gradient(135deg,{'#FDE8E8,#F5C0C0' if _avg_ret_w2>=7 else ('#FEF6E7,#FDEBC0' if _avg_ret_w2>=4 else '#E8FBF4,#C3F0DF')})">📦</div>
     <div>
       <div class="sb-opp-eyebrow" style="color:{_ret_colour}">Inventory Risk</div>
       <div class="sb-opp-title">Return Rate & SKU Health</div>
@@ -2401,24 +2404,24 @@ def generate_insights(user_data, df_raw, lang='en'):
     </div>
     <div class="sb-opp-metric-row">
       <span class="sb-opp-metric-label">High-Return SKUs (≥7%)</span>
-      <span class="sb-opp-metric-value" style="color:{"#E05252" if _hi_ret_count>0 else "#2ECC8F"}">{_hi_ret_count} SKU{"s" if _hi_ret_count!=1 else ""}</span>
+      <span class="sb-opp-metric-value" style="color:{'#E05252' if _hi_ret_count>0 else '#2ECC8F'}">{_hi_ret_count} SKU{'s' if _hi_ret_count!=1 else ''}</span>
     </div>
     <div class="sb-opp-metric-row">
       <span class="sb-opp-metric-label">7% Threshold</span>
-      <span class="sb-opp-metric-value" style="color:#4A6A8A">{"⚠ Breached" if _avg_ret_w2>=7 else ("⚡ Approaching" if _avg_ret_w2>=5 else "✓ Under Control")}</span>
+      <span class="sb-opp-metric-value" style="color:#4A6A8A">{'⚠ Breached' if _avg_ret_w2>=7 else ('⚡ Approaching' if _avg_ret_w2>=5 else '✓ Under Control')}</span>
     </div>
     <div class="sb-opp-metric-row">
       <span class="sb-opp-metric-label">🔴 Inventory Revenue at Risk</span>
       <span class="sb-opp-metric-value" style="color:#E05252;font-size:15px;font-weight:900">{_fmt_inr_sb(_val_at_risk)}</span>
     </div>
   </div>
-  <div class="sb-opp-impact" style="background:{"#FDE8E8" if _avg_ret_w2>=7 else ("#FEF6E7" if _avg_ret_w2>=4 else "#E8FBF4")}">
-    <div class="sb-opp-impact-icon">{"🚨" if _avg_ret_w2>=7 else ("⚠️" if _avg_ret_w2>=4 else "✅")}</div>
+  <div class="sb-opp-impact" style="background:{'#FDE8E8' if _avg_ret_w2>=7 else ('#FEF6E7' if _avg_ret_w2>=4 else '#E8FBF4')}">
+    <div class="sb-opp-impact-icon">{'🚨' if _avg_ret_w2>=7 else ('⚠️' if _avg_ret_w2>=4 else '✅')}</div>
     <div class="sb-opp-impact-text" style="color:{_ret_colour}">
-      <strong>{_ret_severity}:</strong> {f"{_hi_ret_count} SKU{"s" if _hi_ret_count!=1 else ""} with ≥7% returns represent {_fmt_inr_sb(_val_at_risk)} inventory revenue at risk." if _hi_ret_count>0 else f"No SKUs above the 7% return threshold. Inventory health is good."}
+      <strong>{_ret_severity}:</strong> {f"{_hi_ret_count} SKU{'s' if _hi_ret_count!=1 else ''} with ≥7% returns represent {_fmt_inr_sb(_val_at_risk)} inventory revenue at risk." if _hi_ret_count>0 else f"No SKUs above the 7% return threshold. Inventory health is good."}
     </div>
   </div>
-  <div class="sb-opp-action" style="background:{"#FDF0F0" if _avg_ret_w2>=7 else ("#FEF9EC" if _avg_ret_w2>=4 else "#F0FBF6")};color:{"#8B2020" if _avg_ret_w2>=7 else ("#7A4A00" if _avg_ret_w2>=4 else "#1A5C3A")};border-color:{_ret_colour}">
+  <div class="sb-opp-action" style="background:{'#FDF0F0' if _avg_ret_w2>=7 else ('#FEF9EC' if _avg_ret_w2>=4 else '#F0FBF6')};color:{'#8B2020' if _avg_ret_w2>=7 else ('#7A4A00' if _avg_ret_w2>=4 else '#1A5C3A')};border-color:{_ret_colour}">
     → {_ret_action}
   </div>
 </div>
@@ -2444,7 +2447,7 @@ def generate_insights(user_data, df_raw, lang='en'):
     </div>
     <div class="sb-opp-metric-row">
       <span class="sb-opp-metric-label">ONDC Readiness</span>
-      <span class="sb-opp-metric-value" style="color:{"#2ECC8F" if ondc_readiness>=65 else ("#E8A838" if ondc_readiness>=40 else "#E05252")}">{ondc_readiness:.0f}%</span>
+      <span class="sb-opp-metric-value" style="color:{'#2ECC8F' if ondc_readiness>=65 else ('#E8A838' if ondc_readiness>=40 else '#E05252')}">{ondc_readiness:.0f}%</span>
     </div>
     <div class="sb-opp-metric-row">
       <span class="sb-opp-metric-label">🚀 Revenue Potential</span>
@@ -3484,10 +3487,10 @@ def generate_dashboard_data(user_data, df):
         </span>
       </div>
       <div style="display:flex;gap:8px;align-items:flex-start">
-        <span style="color:{"#f39c12" if avg_ret_rate>=7 else "#52e88a"};font-size:14px;line-height:1.5">•</span>
+        <span style="color:{'#f39c12' if avg_ret_rate>=7 else '#52e88a'};font-size:14px;line-height:1.5">•</span>
         <span style="font-size:12px;color:#D0EAFF;line-height:1.6">
-          Return rate <strong style="color:{"#f39c12" if avg_ret_rate>=7 else "#52e88a"}">{avg_ret_rate:.1f}%</strong>
-          {"is above benchmark — SKU quality review recommended." if avg_ret_rate>=7 else "is within benchmark — quality performance healthy."}
+          Return rate <strong style="color:{'#f39c12' if avg_ret_rate>=7 else '#52e88a'}">{avg_ret_rate:.1f}%</strong>
+          {'is above benchmark — SKU quality review recommended.' if avg_ret_rate>=7 else 'is within benchmark — quality performance healthy.'}
         </span>
       </div>
       <div style="display:flex;gap:8px;align-items:flex-start">
