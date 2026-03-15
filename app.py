@@ -1888,7 +1888,7 @@ def generate_insights(user_data, df_raw, lang='en'):
 {_score_card_full('🧠', 'MSME Health Score', f'{health_score:.1f}%', health_score/100,
     'Higher is better · Target &gt;65%',
     '0.38×(1−FinRisk) + 0.29×(Vendor/100) + 0.28×GrowthPotential + 0.05×ForecastMomentum',
-    'DataNetra\'s flagship composite metric — blends financial safety, supply chain health and growth momentum. The single most important number for ONDC readiness and investor-readiness assessment.',
+    "DataNetra's flagship composite metric — blends financial safety, supply chain health and growth momentum. The single most important number for ONDC readiness and investor-readiness assessment.",
     _health_cls(health_score), _health_lbl(health_score))}
 {_score_card_full('🚀', 'Growth Potential Score', f'{growth_sc*100:.0f}%' if growth_sc<=1.0 else f'{growth_sc:.0f}%', growth_sc,
     'Higher is better · Target > 60%',
