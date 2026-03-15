@@ -2,8 +2,8 @@ services:
   - type: web
     name: datanetra-ai
     runtime: python
-    buildCommand: pip3 install -r requirements.txt
-    startCommand: pip3 install --break-system-packages -r requirements.txt && python3 app.py
+    buildCommand: python3 -m venv /opt/venv && /opt/venv/bin/pip install --upgrade pip && /opt/venv/bin/pip install -r requirements.txt
+    startCommand: /opt/venv/bin/python app.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.7
