@@ -3,7 +3,7 @@ services:
     name: datanetra-ai
     runtime: python
     buildCommand: pip3 install -r requirements.txt
-    startCommand: python3 app.py
+    startCommand: pip3 install -r requirements.txt && python3 app.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.7
