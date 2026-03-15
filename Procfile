@@ -1,1 +1,1 @@
-web: /opt/venv/bin/python app.py
+web: /opt/render/project/venv/bin/python app.py
