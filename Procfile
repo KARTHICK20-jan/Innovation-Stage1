@@ -1,1 +1,1 @@
-web: python3 app.py
+web: /opt/venv/bin/python app.py
