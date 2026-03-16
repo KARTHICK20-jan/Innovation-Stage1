@@ -2,7 +2,7 @@ services:
   - type: web
     name: datanetra-ai
     runtime: python
-    buildCommand: python3 -m venv /opt/render/project/venv && /opt/render/project/venv/bin/pip install --upgrade pip && /opt/render/project/venv/bin/pip install -r requirements.txt
+    buildCommand: python3 -m venv /opt/render/project/venv && /opt/render/project/venv/bin/pip install --upgrade pip && /opt/render/project/venv/bin/pip install -r requirements.txt && /opt/render/project/venv/bin/python patch_gradio.py
     startCommand: /opt/render/project/venv/bin/python app.py
     envVars:
       - key: PYTHON_VERSION
