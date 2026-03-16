@@ -10360,9 +10360,11 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 if __name__ == "__main__":
     import os as _os_launch
     _port = int(_os_launch.environ.get("PORT", 7860))
-
-    demo.queue(api_open=False)
-
+    demo.queue(
+        concurrency_count=2,
+        max_size=20,
+        api_open=False,
+    )
     demo.launch(
         server_name="0.0.0.0",
         server_port=_port,
