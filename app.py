@@ -10356,39 +10356,52 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 
 if __name__ == "__main__":
     import os as _os_launch
-    import threading as _threading_launch
+    import re as _re_patch
     _port = int(_os_launch.environ.get("PORT", 7860))
 
-    # Final aggressive patch: replace is_url_ok everywhere gradio uses it
+    # ── Patch 1: Remove health-check from blocks.py on disk ─────────────────
     try:
-        import gradio.networking as _gn_final
-        import gradio.blocks as _gb_final
-        _always_true = lambda *a, **kw: True
-        _gn_final.is_url_ok = _always_true
-        _gb_final.networking.is_url_ok = _always_true
-        # Also patch via sys.modules to be safe
-        import sys as _sys_final
-        if 'gradio.networking' in _sys_final.modules:
-            _sys_final.modules['gradio.networking'].is_url_ok = _always_true
-    except Exception:
-        pass
+        import gradio.blocks as _gb
+        _gb_path = _gb.__file__
+        with open(_gb_path, 'r') as _f:
+            _gb_src = _f.read()
+        # Patch the ValueError raise at line ~2465
+        _bad = ('                if not self.share:\n'
+                '                    raise ValueError(\n'
+                '                        "When localhost is not accessible'
+                ', a shareable link must be created. '
+                'Please set share=True or check your proxy settings '
+                'to allow access to localhost."\n'
+                '                    )\n')
+        _good = '                pass  # health-check disabled\n'
+        if _bad in _gb_src:
+            _gb_src = _gb_src.replace(_bad, _good, 1)
+            with open(_gb_path, 'w') as _f:
+                _f.write(_gb_src)
+            print("INFO: Patched gradio/blocks.py health-check")
+    except Exception as _pe:
+        print(f"WARN: blocks.py patch: {_pe}")
 
+    # ── Patch 2: Fix bool-schema TypeError in gradio_client/utils.py ────────
     try:
-        demo.queue().launch(
-            server_name="0.0.0.0",
-            server_port=_port,
-            show_error=True,
-            share=False,
-        )
-    except ValueError as _launch_err:
-        # Server started but health-check failed — keep process alive
-        # The server is already running on 0.0.0.0:PORT at this point
-        import sys as _sys_exit
-        _err_msg = str(_launch_err)
-        if "localhost" in _err_msg or "shareable" in _err_msg:
-            print(f"INFO: Gradio health-check failed but server is running on port {_port}")
-            print("INFO: Keeping process alive for Render...")
-            # Block forever so Render keeps the process running
-            _threading_launch.Event().wait()
-        else:
-            raise
+        import gradio_client.utils as _gcu
+        _gcu_path = _gcu.__file__
+        with open(_gcu_path, 'r') as _f:
+            _gcu_src = _f.read()
+        _bad2 = '        if "const" in schema:'
+        _good2 = '        if isinstance(schema, dict) and "const" in schema:'
+        if _bad2 in _gcu_src and _good2 not in _gcu_src:
+            _gcu_src = _gcu_src.replace(_bad2, _good2, 1)
+            with open(_gcu_path, 'w') as _f:
+                _f.write(_gcu_src)
+            print("INFO: Patched gradio_client/utils.py bool-schema bug")
+    except Exception as _pe2:
+        print(f"WARN: gradio_client patch: {_pe2}")
+
+    # ── Launch ───────────────────────────────────────────────────────────────
+    demo.queue().launch(
+        server_name="0.0.0.0",
+        server_port=_port,
+        show_error=True,
+        share=False,
+    )
