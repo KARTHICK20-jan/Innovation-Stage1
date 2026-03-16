@@ -47,39 +47,46 @@ if os.path.exists(blocks_path):
     open(blocks_path, 'w').writelines(lines)
     delete_pyc(blocks_path)
 
-# ── Patch 2: gradio_client/utils.py — fix ALL non-dict schema crashes ─────────
+# ── Patch 2: gradio_client/utils.py ──────────────────────────────────────────
+# Fix the exact line that crashes: if "const" in schema (when schema is bool)
+# AND fix _json_schema_to_python_type to guard non-dict schema at entry
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
     lines = open(utils_path).readlines()
-    p3 = False
+    changes = 0
     for i, line in enumerate(lines):
-        # Fix get_type to guard against non-dict schema
-        if 'def get_type(schema)' in line and not p3:
-            # Insert guard as first line of function body
-            if i+1 < len(lines):
-                body_ind = lines[i+1][:len(lines[i+1]) - len(lines[i+1].lstrip())]
-                guard = body_ind + 'if not isinstance(schema, dict): return "str"\n'
-                lines.insert(i+1, guard)
-                p3 = True
-                print(f"✅ Patch 3: gradio_client/utils.py get_type guard (line {i+1})")
-            break
-    if not p3: print("ℹ️  utils.py already patched")
+        # Fix 1: guard "const" in schema when schema is bool
+        if line.strip() == 'if "const" in schema:' and changes == 0:
+            ind = line[:len(line) - len(line.lstrip())]
+            lines[i] = ind + 'if isinstance(schema, dict) and "const" in schema:\n'
+            changes += 1
+            print(f"✅ Patch 3a: utils.py const check (line {i+1})")
+        # Fix 2: guard schema.get() call at top of _json_schema_to_python_type
+        if 'type_ = _json_schema_to_python_type(schema, schema.get' in line:
+            ind = line[:len(line) - len(line.lstrip())]
+            lines[i] = (ind + 'if not isinstance(schema, dict):\n' +
+                       ind + '    type_ = "str"\n' +
+                       ind + 'else:\n' +
+                       ind + '    type_ = _json_schema_to_python_type(schema, schema.get("$defs"))\n')
+            changes += 1
+            print(f"✅ Patch 3b: utils.py schema.get guard (line {i+1})")
+    if changes == 0:
+        print("ℹ️  utils.py already patched")
     open(utils_path, 'w').writelines(lines)
     delete_pyc(utils_path)
 
-# ── Patch 3: gradio/routes.py — fix stop_event None + SSE headers ─────────────
+# ── Patch 3: gradio/routes.py ─────────────────────────────────────────────────
 routes_path = os.path.join(venv_site, 'gradio', 'routes.py')
 if os.path.exists(routes_path):
     lines = open(routes_path).readlines()
-    p4, p5, p6 = False, False, False
+    p4, p5 = False, False
     for i, line in enumerate(lines):
-        # Fix stop_event None
         if not p4 and 'await app.stop_event.wait()' in line:
             ind = line[:len(line) - len(line.lstrip())]
-            lines[i] = ind + 'if app.stop_event is not None:\n' + ind + '    await app.stop_event.wait()\n'
+            lines[i] = (ind + 'if app.stop_event is not None:\n' +
+                        ind + '    await app.stop_event.wait()\n')
             p4 = True
-            print(f"✅ Patch 4: routes.py stop_event None guard (line {i+1})")
-        # Add SSE no-buffer header
+            print(f"✅ Patch 4: routes.py stop_event guard (line {i+1})")
         if not p5 and '"Content-Type": "text/event-stream"' in line:
             lines[i] = line.replace(
                 '"Content-Type": "text/event-stream"',
