@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Patch gradio 4.44.1 for Python 3.14 on Render."""
-import sys, os, glob, py_compile
+import sys, os, glob, py_compile, re
 
 venv_site = os.path.normpath(os.path.join(
     os.path.dirname(sys.executable), '..', 'lib',
@@ -47,48 +47,71 @@ if os.path.exists(blocks_path):
     open(blocks_path, 'w').writelines(lines)
     delete_pyc(blocks_path)
 
-# ── Patch 2: gradio_client/utils.py — fix json_schema_to_python_type ──────────
-# The crash chain:
-# json_schema_to_python_type(schema) → schema.get("$defs") crashes if schema=bool
-# _json_schema_to_python_type(schema['additionalProperties']) → bool passed in
-# get_type(bool_schema) → "const" in bool_schema → TypeError
-# Fix ALL three entry points
+# ── Patch 2: gradio_client/utils.py — replace entire get_type function ────────
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
     src = open(utils_path).read()
-    changes = 0
 
-    # Fix A: json_schema_to_python_type top-level entry
-    old_a = 'type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
-    new_a = ('if not isinstance(schema, dict):\n'
-             '        type_ = "str"\n'
-             '    else:\n'
-             '        type_ = _json_schema_to_python_type(schema, schema.get("$defs"))')
-    if old_a in src and new_a not in src:
-        src = src.replace(old_a, new_a, 1)
-        changes += 1
-        print("✅ Patch 3a: utils.py top-level guard")
+    # Replace the entire get_type function with a safe version
+    new_get_type = '''def get_type(schema):
+    if not isinstance(schema, dict):
+        return "str"
+    if "const" in schema:
+        return f\'"{schema["const"]}"\'
+    if "enum" in schema:
+        vals = schema["enum"]
+        if isinstance(vals, list):
+            return "Literal[" + ", ".join([json.dumps(v) for v in vals]) + "]"
+        return "str"
+    if "$ref" in schema:
+        return schema["$ref"].split("/")[-1]
+    if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema:
+        return "Dict[str, Any]"
+    _type = schema.get("type", "")
+    if _type == "string":
+        return "str"
+    elif _type == "number":
+        return "float"
+    elif _type == "integer":
+        return "int"
+    elif _type == "boolean":
+        return "bool"
+    elif _type == "array":
+        items = schema.get("items", {})
+        return f"List[{get_type(items) if isinstance(items, dict) else \'str\'}]"
+    elif _type == "object":
+        add = schema.get("additionalProperties", {})
+        return f"Dict[str, {get_type(add) if isinstance(add, dict) else \'str\'}]"
+    elif "anyOf" in schema or "oneOf" in schema:
+        key = "anyOf" if "anyOf" in schema else "oneOf"
+        opts = schema[key]
+        if not isinstance(opts, list):
+            return "str"
+        types = [get_type(o) for o in opts if isinstance(o, dict) and o.get("type") != "null"]
+        return ("Optional[" + " | ".join(types) + "]") if types else "Optional[str]"
+    return "str"
+'''
 
-    # Fix B: "const" in schema check
-    old_b = '    if "const" in schema:'
-    new_b = '    if isinstance(schema, dict) and "const" in schema:'
-    if old_b in src and new_b not in src:
-        src = src.replace(old_b, new_b, 1)
-        changes += 1
-        print("✅ Patch 3b: utils.py const check")
-
-    # Fix C: additionalProperties bool crash
-    old_c = 'f"str, {_json_schema_to_python_type(schema[\'additionalProperties\'], defs)}"'
-    new_c = ('f"str, {_json_schema_to_python_type(schema[\'additionalProperties\'], defs) if isinstance(schema.get(\'additionalProperties\'), dict) else \'str\'}"')
-    if old_c in src and new_c not in src:
-        src = src.replace(old_c, new_c, 1)
-        changes += 1
-        print("✅ Patch 3c: utils.py additionalProperties guard")
-
-    if changes == 0:
-        print("ℹ️  utils.py already patched")
-    open(utils_path, 'w').write(src)
-    delete_pyc(utils_path)
+    # Find and replace the existing get_type function
+    # Match: def get_type(schema): ... until next def at same indent
+    pattern = r'(def get_type\(schema\):.*?)(?=\ndef |\Z)'
+    match = re.search(pattern, src, re.DOTALL)
+    if match:
+        src = src[:match.start()] + new_get_type + src[match.end():]
+        open(utils_path, 'w').write(src)
+        delete_pyc(utils_path)
+        print("✅ Patch 3: utils.py get_type replaced with safe version")
+    else:
+        print("⚠️  utils.py get_type not found — trying line-by-line")
+        lines = src.splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            if line.strip() == 'if "const" in schema:':
+                ind = line[:len(line)-len(line.lstrip())]
+                lines[i] = ind + 'if isinstance(schema, dict) and "const" in schema:\n'
+                print(f"✅ Patch 3 fallback: utils.py const check (line {i+1})")
+                break
+        open(utils_path, 'w').writelines(lines)
+        delete_pyc(utils_path)
 
 # ── Patch 3: gradio/routes.py ─────────────────────────────────────────────────
 routes_path = os.path.join(venv_site, 'gradio', 'routes.py')
