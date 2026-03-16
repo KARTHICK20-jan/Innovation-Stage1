@@ -9,26 +9,31 @@ venv_site = os.path.normpath(os.path.join(
 ))
 print(f"Patching in: {venv_site}")
 
-# ── Patch 1: gradio/routes.py — wrap api_info in try/except ──────────────────
+# ── Patch 1: gradio/routes.py — fix stop_event None + wrap api_info ──────────
 routes_path = os.path.join(venv_site, 'gradio', 'routes.py')
 if os.path.exists(routes_path):
     lines = open(routes_path).readlines()
-    p1 = False
+    p1a, p1b = False, False
     for i, line in enumerate(lines):
-        if 'gradio_api_info = api_info(False)' in line and 'try:' not in line:
-            indent = line[:len(line) - len(line.lstrip())]
-            extra  = indent + '    '
-            lines[i] = (
-                indent + 'try:\n' +
-                extra  + 'gradio_api_info = api_info(False)\n' +
-                indent + 'except Exception:\n' +
-                extra  + 'gradio_api_info = {}\n'
-            )
-            p1 = True
-            print(f"✅ Patch 1: routes.py line {i+1} (api_info wrapped)")
-            break
-    if not p1:
-        print("ℹ️  routes.py already patched")
+        # Fix stop_event None crash
+        if 'await app.stop_event.wait()' in line and not p1a:
+            ind = line[:len(line) - len(line.lstrip())]
+            lines[i] = (ind + 'if app.stop_event is not None:\n' +
+                        ind + '    await app.stop_event.wait()\n')
+            p1a = True
+            print(f"✅ Patch 1a: routes.py line {i+1} (stop_event None guard)")
+        # Wrap api_info
+        if 'gradio_api_info = api_info(False)' in line and 'try:' not in line and not p1b:
+            ind = line[:len(line) - len(line.lstrip())]
+            ext = ind + '    '
+            lines[i] = (ind + 'try:\n' +
+                        ext + 'gradio_api_info = api_info(False)\n' +
+                        ind + 'except Exception:\n' +
+                        ext + 'gradio_api_info = {}\n')
+            p1b = True
+            print(f"✅ Patch 1b: routes.py line {i+1} (api_info wrapped)")
+    if not p1a: print("ℹ️  routes.py stop_event already patched")
+    if not p1b: print("ℹ️  routes.py api_info already patched")
     open(routes_path, 'w').writelines(lines)
 else:
     print(f"❌ Not found: {routes_path}")
