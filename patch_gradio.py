@@ -32,14 +32,14 @@ if os.path.exists(blocks_path):
             while j < len(lines) and lines[j].strip() not in (')', ');'): j += 1
             lines[i:j+1] = [' '*n + 'pass  # health-check disabled\n']
             p1 = True
-            print(f"✅ Patch 1: blocks.py health-check removed (line {i+1})")
+            print(f"✅ Patch 1: blocks.py health-check (line {i+1})")
         elif not p2 and 'raise DeprecationWarning(' in lines[i] and i+1 < len(lines) and 'concurrency_count' in lines[i+1]:
             n = len(lines[i]) - len(lines[i].lstrip())
             j = i+1
             while j < len(lines) and lines[j].strip() not in (')', ');'): j += 1
             lines[i:j+1] = [' '*n + 'pass  # DeprecationWarning disabled\n']
             p2 = True
-            print(f"✅ Patch 2: blocks.py DeprecationWarning removed (line {i+1})")
+            print(f"✅ Patch 2: blocks.py DeprecationWarning (line {i+1})")
         if p1 and p2: break
         i += 1
     if not p1: print("ℹ️  blocks.py health-check already patched")
@@ -47,32 +47,47 @@ if os.path.exists(blocks_path):
     open(blocks_path, 'w').writelines(lines)
     delete_pyc(blocks_path)
 
-# ── Patch 2: gradio_client/utils.py ──────────────────────────────────────────
-# Fix the exact line that crashes: if "const" in schema (when schema is bool)
-# AND fix _json_schema_to_python_type to guard non-dict schema at entry
+# ── Patch 2: gradio_client/utils.py — fix json_schema_to_python_type ──────────
+# The crash chain:
+# json_schema_to_python_type(schema) → schema.get("$defs") crashes if schema=bool
+# _json_schema_to_python_type(schema['additionalProperties']) → bool passed in
+# get_type(bool_schema) → "const" in bool_schema → TypeError
+# Fix ALL three entry points
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
-    lines = open(utils_path).readlines()
+    src = open(utils_path).read()
     changes = 0
-    for i, line in enumerate(lines):
-        # Fix 1: guard "const" in schema when schema is bool
-        if line.strip() == 'if "const" in schema:' and changes == 0:
-            ind = line[:len(line) - len(line.lstrip())]
-            lines[i] = ind + 'if isinstance(schema, dict) and "const" in schema:\n'
-            changes += 1
-            print(f"✅ Patch 3a: utils.py const check (line {i+1})")
-        # Fix 2: guard schema.get() call at top of _json_schema_to_python_type
-        if 'type_ = _json_schema_to_python_type(schema, schema.get' in line:
-            ind = line[:len(line) - len(line.lstrip())]
-            lines[i] = (ind + 'if not isinstance(schema, dict):\n' +
-                       ind + '    type_ = "str"\n' +
-                       ind + 'else:\n' +
-                       ind + '    type_ = _json_schema_to_python_type(schema, schema.get("$defs"))\n')
-            changes += 1
-            print(f"✅ Patch 3b: utils.py schema.get guard (line {i+1})")
+
+    # Fix A: json_schema_to_python_type top-level entry
+    old_a = 'type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
+    new_a = ('if not isinstance(schema, dict):\n'
+             '        type_ = "str"\n'
+             '    else:\n'
+             '        type_ = _json_schema_to_python_type(schema, schema.get("$defs"))')
+    if old_a in src and new_a not in src:
+        src = src.replace(old_a, new_a, 1)
+        changes += 1
+        print("✅ Patch 3a: utils.py top-level guard")
+
+    # Fix B: "const" in schema check
+    old_b = '    if "const" in schema:'
+    new_b = '    if isinstance(schema, dict) and "const" in schema:'
+    if old_b in src and new_b not in src:
+        src = src.replace(old_b, new_b, 1)
+        changes += 1
+        print("✅ Patch 3b: utils.py const check")
+
+    # Fix C: additionalProperties bool crash
+    old_c = 'f"str, {_json_schema_to_python_type(schema[\'additionalProperties\'], defs)}"'
+    new_c = ('f"str, {_json_schema_to_python_type(schema[\'additionalProperties\'], defs) if isinstance(schema.get(\'additionalProperties\'), dict) else \'str\'}"')
+    if old_c in src and new_c not in src:
+        src = src.replace(old_c, new_c, 1)
+        changes += 1
+        print("✅ Patch 3c: utils.py additionalProperties guard")
+
     if changes == 0:
         print("ℹ️  utils.py already patched")
-    open(utils_path, 'w').writelines(lines)
+    open(utils_path, 'w').write(src)
     delete_pyc(utils_path)
 
 # ── Patch 3: gradio/routes.py ─────────────────────────────────────────────────
@@ -86,7 +101,7 @@ if os.path.exists(routes_path):
             lines[i] = (ind + 'if app.stop_event is not None:\n' +
                         ind + '    await app.stop_event.wait()\n')
             p4 = True
-            print(f"✅ Patch 4: routes.py stop_event guard (line {i+1})")
+            print(f"✅ Patch 4: routes.py stop_event (line {i+1})")
         if not p5 and '"Content-Type": "text/event-stream"' in line:
             lines[i] = line.replace(
                 '"Content-Type": "text/event-stream"',
