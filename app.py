@@ -10360,18 +10360,35 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 if __name__ == "__main__":
     import os as _os_launch
     import threading as _thr
+    import asyncio as _asyncio
     _port = int(_os_launch.environ.get("PORT", 7860))
 
+    demo.queue(
+        concurrency_count=2,
+        max_size=20,
+        api_open=False,
+    )
+
     try:
-        demo.queue().launch(
+        demo.launch(
             server_name="0.0.0.0",
             server_port=_port,
             show_error=True,
             share=False,
+            max_threads=4,
         )
     except ValueError as _e:
-        if "localhost" in str(_e) or "shareable" in str(_e):
-            print(f"INFO: Server running on port {_port}, keeping alive...")
+        _msg = str(_e)
+        if "localhost" in _msg or "shareable" in _msg:
+            print(f"INFO: Server on port {_port}, initializing stop_event...")
+            # Initialize stop_event so routes.py doesn't crash on button clicks
+            try:
+                if hasattr(demo, 'server_app') and demo.server_app is not None:
+                    if demo.server_app.stop_event is None:
+                        demo.server_app.stop_event = _asyncio.Event()
+            except Exception as _se:
+                print(f"stop_event init: {_se}")
+            print("INFO: Keeping process alive...")
             _thr.Event().wait()
         else:
             raise
