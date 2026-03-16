@@ -10359,11 +10359,19 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 
 if __name__ == "__main__":
     import os as _os_launch
+    import threading as _thr
     _port = int(_os_launch.environ.get("PORT", 7860))
-    # blocks.py is patched by patch_gradio.py — .launch() works correctly now
-    demo.queue().launch(
-        server_name="0.0.0.0",
-        server_port=_port,
-        show_error=True,
-        share=False,
-    )
+
+    try:
+        demo.queue().launch(
+            server_name="0.0.0.0",
+            server_port=_port,
+            show_error=True,
+            share=False,
+        )
+    except ValueError as _e:
+        if "localhost" in str(_e) or "shareable" in str(_e):
+            print(f"INFO: Server running on port {_port}, keeping alive...")
+            _thr.Event().wait()
+        else:
+            raise
