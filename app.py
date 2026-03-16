@@ -10370,5 +10370,7 @@ if __name__ == "__main__":
         server_port=_port,
         show_error=True,
         share=False,
-        max_threads=4,
+        max_threads=40,
+        root_path="",
+        ssl_verify=False,
     )
