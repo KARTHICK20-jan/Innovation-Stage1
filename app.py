@@ -75,6 +75,13 @@ except Exception:
 # ─────────────────────────────────────────────────────────────────────────────
 import gradio as gr
 
+# Patch gradio 4.44.1 health-check: fails on Render proxy network
+try:
+    import gradio.networking as _gr_net_patch
+    _gr_net_patch.is_url_ok = lambda *a, **kw: True
+except Exception:
+    pass
+
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -10349,4 +10356,5 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=_port,
         show_error=True,
+        share=False,
     )
