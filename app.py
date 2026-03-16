@@ -3900,6 +3900,9 @@ def build_category_filter_chart(df, selected_category):
 
 # ── Custom Gradio CSS ───────────────────────────────────────────────────────────
 custom_css = """
+/* Hide Gradio API error toast (caused by Python 3.14 api_info workaround) */
+.toast-wrap, .toast-body, div.toast { display: none !important; }
+
 /* ── Header / Logo ── */
 .header-container{background:linear-gradient(135deg,#0f2557 0%,#1a3a6b 100%);padding:8px 20px;display:flex;justify-content:space-between;align-items:center;}
 .logo-section{display:flex;align-items:center;gap:12px;}
@@ -10356,18 +10359,11 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 
 if __name__ == "__main__":
     import os as _os_launch
-    import uvicorn as _uvicorn
     _port = int(_os_launch.environ.get("PORT", 7860))
-
-    # Build gradio ASGI app directly — bypasses .launch() Python 3.14 bugs
-    demo.queue()
-    from gradio.routes import App as _GradioApp
-    _asgi_app = _GradioApp.create_app(demo)
-
-    print(f"Starting DataNetra on port {_port}")
-    _uvicorn.run(
-        _asgi_app,
-        host="0.0.0.0",
-        port=_port,
-        log_level="info",
+    # blocks.py is patched by patch_gradio.py — .launch() works correctly now
+    demo.queue().launch(
+        server_name="0.0.0.0",
+        server_port=_port,
+        show_error=True,
+        share=False,
     )
