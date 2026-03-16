@@ -87,3 +87,31 @@ else:
     print(f"❌ Not found: {routes_path}")
 
 print("Done.")
+
+
+# ── Patch 5: gradio/routes.py — add keep-alive for SSE on Render ──────────────
+# Render's proxy closes SSE connections after 30s without activity
+# Adding X-Accel-Buffering: no header prevents Nginx from buffering SSE
+import os as _os_patch
+_routes_path = os.path.join(venv_site, 'gradio', 'routes.py')
+if os.path.exists(_routes_path):
+    _src = open(_routes_path).read()
+    _old = 'return StreamingResponse('
+    # Find the SSE streaming response and add no-buffer header
+    if 'X-Accel-Buffering' not in _src and _old in _src:
+        # Find the headers dict near StreamingResponse
+        _idx = _src.find('return StreamingResponse(')
+        _chunk = _src[_idx:_idx+300]
+        if '"Content-Type": "text/event-stream"' in _chunk or "text/event-stream" in _chunk:
+            _src = _src.replace(
+                '"Content-Type": "text/event-stream"',
+                '"Content-Type": "text/event-stream", "X-Accel-Buffering": "no", "Cache-Control": "no-cache"',
+                1
+            )
+            open(_routes_path, 'w').write(_src)
+            delete_pyc(_routes_path)
+            print("✅ Patch 5: routes.py SSE keep-alive headers added")
+        else:
+            print("ℹ️  Patch 5: SSE header location not found")
+    else:
+        print("ℹ️  Patch 5: already patched or pattern not found")
