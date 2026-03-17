@@ -19,29 +19,25 @@ def delete_pyc(py_path):
     except Exception:
         pass
 
-def patch_file(path, old, new, label):
-    if not os.path.exists(path):
-        print(f"❌ Not found: {path}")
-        return False
-    src = open(path).read()
-    if old in src:
-        open(path, 'w').write(src.replace(old, new, 1))
-        delete_pyc(path)
-        print(f"✅ {label}")
-        return True
-    else:
-        print(f"ℹ️  Already patched: {label}")
-        return False
-
 # ── Patch 1: pydub — pyaudioop removed in Python 3.13+ ───────────────────────
-patch_file(
-    os.path.join(venv_site, 'pydub', 'utils.py'),
-    'import pyaudioop as audioop',
-    'try:\n    import pyaudioop as audioop\nexcept ImportError:\n    audioop = None',
-    'pydub/utils.py pyaudioop fix'
-)
+pydub_path = os.path.join(venv_site, 'pydub', 'utils.py')
+if os.path.exists(pydub_path):
+    lines = open(pydub_path).readlines()
+    for i, line in enumerate(lines):
+        if line.strip() == 'import pyaudioop as audioop':
+            ind = line[:len(line) - len(line.lstrip())]
+            lines[i] = (ind + 'try:\n' +
+                        ind + '    import pyaudioop as audioop\n' +
+                        ind + 'except ImportError:\n' +
+                        ind + '    audioop = None\n')
+            open(pydub_path, 'w').writelines(lines)
+            delete_pyc(pydub_path)
+            print("✅ pydub/utils.py pyaudioop fix")
+            break
+    else:
+        print("ℹ️  pydub already patched")
 
-# ── Patch 2: gradio/blocks.py — health-check + DeprecationWarning ─────────────
+# ── Patch 2: gradio/blocks.py ─────────────────────────────────────────────────
 blocks_path = os.path.join(venv_site, 'gradio', 'blocks.py')
 if os.path.exists(blocks_path):
     lines = open(blocks_path).readlines()
@@ -69,34 +65,31 @@ if os.path.exists(blocks_path):
     open(blocks_path, 'w').writelines(lines)
     delete_pyc(blocks_path)
 
-# ── Patch 3: gradio_client/utils.py — fix bool schema crashes ─────────────────
+# ── Patch 3: gradio_client/utils.py ──────────────────────────────────────────
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
     src = open(utils_path).read()
     changed = False
-
-    # Fix A: json_schema_to_python_type entry point (line 893)
+    # Fix line 893: schema.get crashes on bool
     old_a = 'type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
     new_a = 'if not isinstance(schema, dict): return "str"\n    type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
     if old_a in src and new_a not in src:
         src = src.replace(old_a, new_a, 1)
         changed = True
         print("✅ utils.py line 893 guard")
-
-    # Fix B: get_type const check (line 863)
+    # Fix line 863: "const" in bool crashes
     old_b = '    if "const" in schema:'
     new_b = '    if isinstance(schema, dict) and "const" in schema:'
     if old_b in src and new_b not in src:
         src = src.replace(old_b, new_b, 1)
         changed = True
         print("✅ utils.py line 863 const guard")
-
     if not changed:
         print("ℹ️  utils.py already patched")
     open(utils_path, 'w').write(src)
     delete_pyc(utils_path)
 
-# ── Patch 4: gradio/routes.py — stop_event + SSE headers ──────────────────────
+# ── Patch 4: gradio/routes.py ─────────────────────────────────────────────────
 routes_path = os.path.join(venv_site, 'gradio', 'routes.py')
 if os.path.exists(routes_path):
     lines = open(routes_path).readlines()
@@ -104,7 +97,8 @@ if os.path.exists(routes_path):
     for i, line in enumerate(lines):
         if not p4 and 'await app.stop_event.wait()' in line:
             ind = line[:len(line) - len(line.lstrip())]
-            lines[i] = ind + 'if app.stop_event is not None:\n' + ind + '    await app.stop_event.wait()\n'
+            lines[i] = (ind + 'if app.stop_event is not None:\n' +
+                        ind + '    await app.stop_event.wait()\n')
             p4 = True
             print(f"✅ routes.py stop_event guard")
         if not p5 and '"Content-Type": "text/event-stream"' in line:
