@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Patch gradio 4.44.1 for Python 3.14 on Render."""
-import sys, os, glob, py_compile, re
+"""Patch gradio 4.44.1 + dependencies for Python 3.14 on Render."""
+import sys, os, glob, py_compile
 
 venv_site = os.path.normpath(os.path.join(
     os.path.dirname(sys.executable), '..', 'lib',
@@ -19,7 +19,29 @@ def delete_pyc(py_path):
     except Exception:
         pass
 
-# ── Patch 1: gradio/blocks.py ─────────────────────────────────────────────────
+def patch_file(path, old, new, label):
+    if not os.path.exists(path):
+        print(f"❌ Not found: {path}")
+        return False
+    src = open(path).read()
+    if old in src:
+        open(path, 'w').write(src.replace(old, new, 1))
+        delete_pyc(path)
+        print(f"✅ {label}")
+        return True
+    else:
+        print(f"ℹ️  Already patched: {label}")
+        return False
+
+# ── Patch 1: pydub — pyaudioop removed in Python 3.13+ ───────────────────────
+patch_file(
+    os.path.join(venv_site, 'pydub', 'utils.py'),
+    'import pyaudioop as audioop',
+    'try:\n    import pyaudioop as audioop\nexcept ImportError:\n    audioop = None',
+    'pydub/utils.py pyaudioop fix'
+)
+
+# ── Patch 2: gradio/blocks.py — health-check + DeprecationWarning ─────────────
 blocks_path = os.path.join(venv_site, 'gradio', 'blocks.py')
 if os.path.exists(blocks_path):
     lines = open(blocks_path).readlines()
@@ -32,14 +54,14 @@ if os.path.exists(blocks_path):
             while j < len(lines) and lines[j].strip() not in (')', ');'): j += 1
             lines[i:j+1] = [' '*n + 'pass  # health-check disabled\n']
             p1 = True
-            print(f"✅ Patch 1: blocks.py health-check (line {i+1})")
+            print(f"✅ blocks.py health-check removed")
         elif not p2 and 'raise DeprecationWarning(' in lines[i] and i+1 < len(lines) and 'concurrency_count' in lines[i+1]:
             n = len(lines[i]) - len(lines[i].lstrip())
             j = i+1
             while j < len(lines) and lines[j].strip() not in (')', ');'): j += 1
             lines[i:j+1] = [' '*n + 'pass  # DeprecationWarning disabled\n']
             p2 = True
-            print(f"✅ Patch 2: blocks.py DeprecationWarning (line {i+1})")
+            print(f"✅ blocks.py DeprecationWarning removed")
         if p1 and p2: break
         i += 1
     if not p1: print("ℹ️  blocks.py health-check already patched")
@@ -47,73 +69,34 @@ if os.path.exists(blocks_path):
     open(blocks_path, 'w').writelines(lines)
     delete_pyc(blocks_path)
 
-# ── Patch 2: gradio_client/utils.py — replace entire get_type function ────────
+# ── Patch 3: gradio_client/utils.py — fix bool schema crashes ─────────────────
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
     src = open(utils_path).read()
+    changed = False
 
-    # Replace the entire get_type function with a safe version
-    new_get_type = '''def get_type(schema):
-    if not isinstance(schema, dict):
-        return "str"
-    if "const" in schema:
-        return f\'"{schema["const"]}"\'
-    if "enum" in schema:
-        vals = schema["enum"]
-        if isinstance(vals, list):
-            return "Literal[" + ", ".join([json.dumps(v) for v in vals]) + "]"
-        return "str"
-    if "$ref" in schema:
-        return schema["$ref"].split("/")[-1]
-    if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema:
-        return "Dict[str, Any]"
-    _type = schema.get("type", "")
-    if _type == "string":
-        return "str"
-    elif _type == "number":
-        return "float"
-    elif _type == "integer":
-        return "int"
-    elif _type == "boolean":
-        return "bool"
-    elif _type == "array":
-        items = schema.get("items", {})
-        return f"List[{get_type(items) if isinstance(items, dict) else \'str\'}]"
-    elif _type == "object":
-        add = schema.get("additionalProperties", {})
-        return f"Dict[str, {get_type(add) if isinstance(add, dict) else \'str\'}]"
-    elif "anyOf" in schema or "oneOf" in schema:
-        key = "anyOf" if "anyOf" in schema else "oneOf"
-        opts = schema[key]
-        if not isinstance(opts, list):
-            return "str"
-        types = [get_type(o) for o in opts if isinstance(o, dict) and o.get("type") != "null"]
-        return ("Optional[" + " | ".join(types) + "]") if types else "Optional[str]"
-    return "str"
-'''
+    # Fix A: json_schema_to_python_type entry point (line 893)
+    old_a = 'type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
+    new_a = 'if not isinstance(schema, dict): return "str"\n    type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
+    if old_a in src and new_a not in src:
+        src = src.replace(old_a, new_a, 1)
+        changed = True
+        print("✅ utils.py line 893 guard")
 
-    # Find and replace the existing get_type function
-    # Match: def get_type(schema): ... until next def at same indent
-    pattern = r'(def get_type\(schema\):.*?)(?=\ndef |\Z)'
-    match = re.search(pattern, src, re.DOTALL)
-    if match:
-        src = src[:match.start()] + new_get_type + src[match.end():]
-        open(utils_path, 'w').write(src)
-        delete_pyc(utils_path)
-        print("✅ Patch 3: utils.py get_type replaced with safe version")
-    else:
-        print("⚠️  utils.py get_type not found — trying line-by-line")
-        lines = src.splitlines(keepends=True)
-        for i, line in enumerate(lines):
-            if line.strip() == 'if "const" in schema:':
-                ind = line[:len(line)-len(line.lstrip())]
-                lines[i] = ind + 'if isinstance(schema, dict) and "const" in schema:\n'
-                print(f"✅ Patch 3 fallback: utils.py const check (line {i+1})")
-                break
-        open(utils_path, 'w').writelines(lines)
-        delete_pyc(utils_path)
+    # Fix B: get_type const check (line 863)
+    old_b = '    if "const" in schema:'
+    new_b = '    if isinstance(schema, dict) and "const" in schema:'
+    if old_b in src and new_b not in src:
+        src = src.replace(old_b, new_b, 1)
+        changed = True
+        print("✅ utils.py line 863 const guard")
 
-# ── Patch 3: gradio/routes.py ─────────────────────────────────────────────────
+    if not changed:
+        print("ℹ️  utils.py already patched")
+    open(utils_path, 'w').write(src)
+    delete_pyc(utils_path)
+
+# ── Patch 4: gradio/routes.py — stop_event + SSE headers ──────────────────────
 routes_path = os.path.join(venv_site, 'gradio', 'routes.py')
 if os.path.exists(routes_path):
     lines = open(routes_path).readlines()
@@ -121,20 +104,19 @@ if os.path.exists(routes_path):
     for i, line in enumerate(lines):
         if not p4 and 'await app.stop_event.wait()' in line:
             ind = line[:len(line) - len(line.lstrip())]
-            lines[i] = (ind + 'if app.stop_event is not None:\n' +
-                        ind + '    await app.stop_event.wait()\n')
+            lines[i] = ind + 'if app.stop_event is not None:\n' + ind + '    await app.stop_event.wait()\n'
             p4 = True
-            print(f"✅ Patch 4: routes.py stop_event (line {i+1})")
+            print(f"✅ routes.py stop_event guard")
         if not p5 and '"Content-Type": "text/event-stream"' in line:
             lines[i] = line.replace(
                 '"Content-Type": "text/event-stream"',
                 '"Content-Type": "text/event-stream", "X-Accel-Buffering": "no", "Cache-Control": "no-cache"'
             )
             p5 = True
-            print(f"✅ Patch 5: routes.py SSE headers (line {i+1})")
+            print(f"✅ routes.py SSE headers")
     if not p4: print("ℹ️  routes.py stop_event already patched")
     if not p5: print("ℹ️  routes.py SSE headers already patched")
     open(routes_path, 'w').writelines(lines)
     delete_pyc(routes_path)
 
-print("Done.")
+print("All patches done.")
