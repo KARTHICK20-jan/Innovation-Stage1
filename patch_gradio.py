@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Patch gradio 4.44.1 + dependencies for Python 3.14 on Render."""
-import sys, os, glob, py_compile
+import sys, os, glob, py_compile, ast
 
 venv_site = os.path.normpath(os.path.join(
     os.path.dirname(sys.executable), '..', 'lib',
@@ -19,7 +19,7 @@ def delete_pyc(py_path):
     except Exception:
         pass
 
-# ── Patch 1: pydub — pyaudioop removed in Python 3.13+ ───────────────────────
+# ── Patch 1: pydub/utils.py ───────────────────────────────────────────────────
 pydub_path = os.path.join(venv_site, 'pydub', 'utils.py')
 if os.path.exists(pydub_path):
     lines = open(pydub_path).readlines()
@@ -50,14 +50,14 @@ if os.path.exists(blocks_path):
             while j < len(lines) and lines[j].strip() not in (')', ');'): j += 1
             lines[i:j+1] = [' '*n + 'pass  # health-check disabled\n']
             p1 = True
-            print(f"✅ blocks.py health-check removed")
+            print("✅ blocks.py health-check removed")
         elif not p2 and 'raise DeprecationWarning(' in lines[i] and i+1 < len(lines) and 'concurrency_count' in lines[i+1]:
             n = len(lines[i]) - len(lines[i].lstrip())
             j = i+1
             while j < len(lines) and lines[j].strip() not in (')', ');'): j += 1
             lines[i:j+1] = [' '*n + 'pass  # DeprecationWarning disabled\n']
             p2 = True
-            print(f"✅ blocks.py DeprecationWarning removed")
+            print("✅ blocks.py DeprecationWarning removed")
         if p1 and p2: break
         i += 1
     if not p1: print("ℹ️  blocks.py health-check already patched")
@@ -65,28 +65,74 @@ if os.path.exists(blocks_path):
     open(blocks_path, 'w').writelines(lines)
     delete_pyc(blocks_path)
 
-# ── Patch 3: gradio_client/utils.py ──────────────────────────────────────────
+# ── Patch 3: gradio_client/utils.py — replace get_type + guard entry ──────────
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
-    src = open(utils_path).read()
-    changed = False
-    # Fix line 893: schema.get crashes on bool
-    old_a = 'type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
-    new_a = 'if not isinstance(schema, dict): return "str"\n    type_ = _json_schema_to_python_type(schema, schema.get("$defs"))'
-    if old_a in src and new_a not in src:
-        src = src.replace(old_a, new_a, 1)
-        changed = True
-        print("✅ utils.py line 893 guard")
-    # Fix line 863: "const" in bool crashes
-    old_b = '    if "const" in schema:'
-    new_b = '    if isinstance(schema, dict) and "const" in schema:'
-    if old_b in src and new_b not in src:
-        src = src.replace(old_b, new_b, 1)
-        changed = True
-        print("✅ utils.py line 863 const guard")
-    if not changed:
-        print("ℹ️  utils.py already patched")
-    open(utils_path, 'w').write(src)
+    lines = open(utils_path).readlines()
+
+    # Step A: guard the entry point (line 893/894)
+    for i, line in enumerate(lines):
+        if 'type_ = _json_schema_to_python_type(schema, schema.get("$defs"))' in line:
+            ind = line[:len(line) - len(line.lstrip())]
+            lines[i] = (ind + 'if not isinstance(schema, dict):\n' +
+                        ind + '    type_ = "str"\n' +
+                        ind + 'else:\n' +
+                        ind + '    type_ = _json_schema_to_python_type(schema, schema.get("$defs"))\n')
+            print("✅ utils.py entry guard (schema.get)")
+            break
+
+    # Step B: replace entire get_type function body to guard ALL checks
+    new_get_type_body = [
+        '    if not isinstance(schema, dict):\n',
+        '        return "str"\n',
+        '    if "const" in schema:\n',
+        '        return f\'"{schema["const"]}"\'\n',
+        '    if "enum" in schema:\n',
+        '        return "str"\n',
+        '    if "$ref" in schema:\n',
+        '        return schema["$ref"].split("/")[-1]\n',
+        '    if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema:\n',
+        '        return "Dict[str, Any]"\n',
+        '    _type = schema.get("type", "")\n',
+        '    if _type == "string":\n',
+        '        return "str"\n',
+        '    elif _type == "number":\n',
+        '        return "float"\n',
+        '    elif _type == "integer":\n',
+        '        return "int"\n',
+        '    elif _type == "boolean":\n',
+        '        return "bool"\n',
+        '    elif _type == "array":\n',
+        '        items = schema.get("items", {})\n',
+        '        return f"List[{get_type(items) if isinstance(items, dict) else \'str\'}]"\n',
+        '    elif _type == "object":\n',
+        '        add = schema.get("additionalProperties", {})\n',
+        '        return f"Dict[str, {get_type(add) if isinstance(add, dict) else \'str\'}]"\n',
+        '    return "str"\n',
+    ]
+
+    # Find get_type function and replace its body
+    in_get_type = False
+    func_start = None
+    func_indent = None
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if stripped.startswith('def get_type(schema'):
+            in_get_type = True
+            func_start = i
+            func_indent = indent
+            continue
+        if in_get_type:
+            # Find end of function (next def at same or lower indent)
+            if stripped.startswith('def ') and indent <= func_indent:
+                # Replace function body
+                func_def_line = lines[func_start]
+                lines[func_start:i] = [func_def_line] + new_get_type_body
+                print("✅ utils.py get_type replaced")
+                break
+
+    open(utils_path, 'w').writelines(lines)
     delete_pyc(utils_path)
 
 # ── Patch 4: gradio/routes.py ─────────────────────────────────────────────────
@@ -100,14 +146,14 @@ if os.path.exists(routes_path):
             lines[i] = (ind + 'if app.stop_event is not None:\n' +
                         ind + '    await app.stop_event.wait()\n')
             p4 = True
-            print(f"✅ routes.py stop_event guard")
+            print("✅ routes.py stop_event guard")
         if not p5 and '"Content-Type": "text/event-stream"' in line:
             lines[i] = line.replace(
                 '"Content-Type": "text/event-stream"',
                 '"Content-Type": "text/event-stream", "X-Accel-Buffering": "no", "Cache-Control": "no-cache"'
             )
             p5 = True
-            print(f"✅ routes.py SSE headers")
+            print("✅ routes.py SSE headers")
     if not p4: print("ℹ️  routes.py stop_event already patched")
     if not p5: print("ℹ️  routes.py SSE headers already patched")
     open(routes_path, 'w').writelines(lines)
