@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Patch gradio 4.44.1 + dependencies for Python 3.14 on Render."""
-import sys, os, glob, py_compile, ast
+import sys, os, glob, py_compile
 
 venv_site = os.path.normpath(os.path.join(
     os.path.dirname(sys.executable), '..', 'lib',
@@ -16,8 +16,8 @@ def delete_pyc(py_path):
         os.remove(pyc)
     try:
         py_compile.compile(py_path, doraise=True)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"   compile warning: {e}")
 
 # ── Patch 1: pydub/utils.py ───────────────────────────────────────────────────
 pydub_path = os.path.join(venv_site, 'pydub', 'utils.py')
@@ -65,73 +65,26 @@ if os.path.exists(blocks_path):
     open(blocks_path, 'w').writelines(lines)
     delete_pyc(blocks_path)
 
-# ── Patch 3: gradio_client/utils.py — replace get_type + guard entry ──────────
+# ── Patch 3: gradio_client/utils.py ──────────────────────────────────────────
+# Insert ONE guard line at top of get_type body — leaves rest of function intact
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
     lines = open(utils_path).readlines()
-
-    # Step A: guard the entry point (line 893/894)
+    changed = False
     for i, line in enumerate(lines):
-        if 'type_ = _json_schema_to_python_type(schema, schema.get("$defs"))' in line:
-            ind = line[:len(line) - len(line.lstrip())]
-            lines[i] = (ind + 'if not isinstance(schema, dict):\n' +
-                        ind + '    type_ = "str"\n' +
-                        ind + 'else:\n' +
-                        ind + '    type_ = _json_schema_to_python_type(schema, schema.get("$defs"))\n')
-            print("✅ utils.py entry guard (schema.get)")
+        if 'def get_type(schema' in line and not changed:
+            # Find first line of function body
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and 'not isinstance' not in lines[j]:
+                ind = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
+                lines.insert(j, ind + 'if not isinstance(schema, dict): return "str"\n')
+                changed = True
+                print(f"✅ utils.py get_type guard inserted")
+            else:
+                print("ℹ️  utils.py get_type already guarded")
             break
-
-    # Step B: replace entire get_type function body to guard ALL checks
-    new_get_type_body = [
-        '    if not isinstance(schema, dict):\n',
-        '        return "str"\n',
-        '    if "const" in schema:\n',
-        '        return f\'"{schema["const"]}"\'\n',
-        '    if "enum" in schema:\n',
-        '        return "str"\n',
-        '    if "$ref" in schema:\n',
-        '        return schema["$ref"].split("/")[-1]\n',
-        '    if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema:\n',
-        '        return "Dict[str, Any]"\n',
-        '    _type = schema.get("type", "")\n',
-        '    if _type == "string":\n',
-        '        return "str"\n',
-        '    elif _type == "number":\n',
-        '        return "float"\n',
-        '    elif _type == "integer":\n',
-        '        return "int"\n',
-        '    elif _type == "boolean":\n',
-        '        return "bool"\n',
-        '    elif _type == "array":\n',
-        '        items = schema.get("items", {})\n',
-        '        return f"List[{get_type(items) if isinstance(items, dict) else \'str\'}]"\n',
-        '    elif _type == "object":\n',
-        '        add = schema.get("additionalProperties", {})\n',
-        '        return f"Dict[str, {get_type(add) if isinstance(add, dict) else \'str\'}]"\n',
-        '    return "str"\n',
-    ]
-
-    # Find get_type function and replace its body
-    in_get_type = False
-    func_start = None
-    func_indent = None
-    for i, line in enumerate(lines):
-        stripped = line.lstrip()
-        indent = len(line) - len(stripped)
-        if stripped.startswith('def get_type(schema'):
-            in_get_type = True
-            func_start = i
-            func_indent = indent
-            continue
-        if in_get_type:
-            # Find end of function (next def at same or lower indent)
-            if stripped.startswith('def ') and indent <= func_indent:
-                # Replace function body
-                func_def_line = lines[func_start]
-                lines[func_start:i] = [func_def_line] + new_get_type_body
-                print("✅ utils.py get_type replaced")
-                break
-
     open(utils_path, 'w').writelines(lines)
     delete_pyc(utils_path)
 
