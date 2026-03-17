@@ -66,14 +66,16 @@ if os.path.exists(blocks_path):
     delete_pyc(blocks_path)
 
 # ── Patch 3: gradio_client/utils.py ──────────────────────────────────────────
-# Insert ONE guard line at top of get_type body — leaves rest of function intact
+# Fix ALL crash points in the call chain by patching _json_schema_to_python_type
+# to guard against non-dict schema at the very start
 utils_path = os.path.join(venv_site, 'gradio_client', 'utils.py')
 if os.path.exists(utils_path):
     lines = open(utils_path).readlines()
+    
+    # Find _json_schema_to_python_type function and insert guard at top
     changed = False
     for i, line in enumerate(lines):
-        if 'def get_type(schema' in line and not changed:
-            # Find first line of function body
+        if 'def _json_schema_to_python_type(schema' in line and not changed:
             j = i + 1
             while j < len(lines) and not lines[j].strip():
                 j += 1
@@ -81,10 +83,43 @@ if os.path.exists(utils_path):
                 ind = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
                 lines.insert(j, ind + 'if not isinstance(schema, dict): return "str"\n')
                 changed = True
-                print(f"✅ utils.py get_type guard inserted")
+                print("✅ utils.py _json_schema_to_python_type guard inserted")
+            else:
+                print("ℹ️  utils.py _json_schema_to_python_type already guarded")
+            break
+
+    # Also guard get_type
+    for i, line in enumerate(lines):
+        if 'def get_type(schema' in line:
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and 'not isinstance' not in lines[j]:
+                ind = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
+                lines.insert(j, ind + 'if not isinstance(schema, dict): return "str"\n')
+                changed = True
+                print("✅ utils.py get_type guard inserted")
             else:
                 print("ℹ️  utils.py get_type already guarded")
             break
+
+    # Also guard json_schema_to_python_type (top-level entry)
+    for i, line in enumerate(lines):
+        if 'def json_schema_to_python_type(schema' in line:
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and 'not isinstance' not in lines[j]:
+                ind = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
+                lines.insert(j, ind + 'if not isinstance(schema, dict): return "str"\n')
+                changed = True
+                print("✅ utils.py json_schema_to_python_type guard inserted")
+            else:
+                print("ℹ️  utils.py json_schema_to_python_type already guarded")
+            break
+
+    if not changed:
+        print("ℹ️  utils.py all already patched")
     open(utils_path, 'w').writelines(lines)
     delete_pyc(utils_path)
 
