@@ -10359,7 +10359,49 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 
 if __name__ == "__main__":
     import os as _os_launch
+    import asyncio as _asyncio
+
     _port = int(_os_launch.environ.get("PORT", 7860))
+
+    # ── Fix: Gradio 4.44.1 queueing.py race on Render ────────────────────────
+    # pending_message_lock is None until Queue.start() fires its async init,
+    # but Render routes traffic before that completes → TypeError on push().
+    # Patch Queue.__init__ to eagerly create the lock in the correct event loop.
+    try:
+        import gradio.queueing as _gr_queueing
+        _orig_queue_init = _gr_queueing.Queue.__init__
+
+        def _patched_queue_init(self, *args, **kwargs):
+            _orig_queue_init(self, *args, **kwargs)
+            # Ensure lock exists immediately; will be replaced by start() if needed
+            if getattr(self, "pending_message_lock", None) is None:
+                try:
+                    self.pending_message_lock = _asyncio.Lock()
+                except RuntimeError:
+                    # No running event loop yet — create a placeholder that
+                    # will be overwritten when the loop starts
+                    pass
+
+        _gr_queueing.Queue.__init__ = _patched_queue_init
+        print("✅ queueing.py pending_message_lock race-condition fix applied")
+    except Exception as _e:
+        print(f"ℹ️  queueing patch skipped: {_e}")
+
+    # ── Also patch Queue.push to guard against None lock ─────────────────────
+    try:
+        import gradio.queueing as _gr_queueing2
+        _orig_push = _gr_queueing2.Queue.push
+
+        async def _safe_push(self, *args, **kwargs):
+            if getattr(self, "pending_message_lock", None) is None:
+                self.pending_message_lock = _asyncio.Lock()
+            return await _orig_push(self, *args, **kwargs)
+
+        _gr_queueing2.Queue.push = _safe_push
+        print("✅ queueing.py Queue.push None-lock guard applied")
+    except Exception as _e:
+        print(f"ℹ️  queue push patch skipped: {_e}")
+
     demo.queue(
         concurrency_count=2,
         max_size=20,
