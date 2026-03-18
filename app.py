@@ -10363,18 +10363,47 @@ if __name__ == "__main__":
 
     _port = int(_os_launch.environ.get("PORT", 7860))
 
-    # ── Patch 1: Queue.push None-lock guard ──────────────────────────────────
+    # ── Patch 1: ALL Queue async-primitive None-guards ───────────────────────
+    # Gradio 4.44.1 Queue.__init__ leaves pending_message_lock, delete_lock,
+    # and other asyncio primitives as None until Queue.start() runs.
+    # On Render, tasks fire before start() completes → TypeError.
+    # We patch every method that uses these primitives to auto-create them.
     try:
         import gradio.queueing as _gr_q
+        import re as _re_q
+
+        # Collect all method names that use async-with or await on self.<attr>
+        import inspect as _inspect
+        _src = _inspect.getsource(_gr_q.Queue)
+        _lock_attrs = set(_re_q.findall(r"async with self\.(\w+)", _src))
+        _event_attrs = set(_re_q.findall(r"await self\.(\w+)\.(?:wait|set|clear)", _src))
+        print(f"✅ Queue lock attrs: {_lock_attrs}")
+        print(f"✅ Queue event attrs: {_event_attrs}")
+
+        # Patch Queue.start_processing to guard all locks before running
+        _orig_start_processing = _gr_q.Queue.start_processing
+        async def _safe_start_processing(self, *a, **kw):
+            for _attr in _lock_attrs:
+                if getattr(self, _attr, None) is None:
+                    setattr(self, _attr, _asyncio.Lock())
+            for _attr in _event_attrs:
+                if getattr(self, _attr, None) is None:
+                    setattr(self, _attr, _asyncio.Event())
+            return await _orig_start_processing(self, *a, **kw)
+        _gr_q.Queue.start_processing = _safe_start_processing
+
+        # Also patch push as a safety net
         _orig_push = _gr_q.Queue.push
         async def _safe_push(self, *a, **kw):
-            if getattr(self, "pending_message_lock", None) is None:
-                self.pending_message_lock = _asyncio.Lock()
+            for _attr in _lock_attrs:
+                if getattr(self, _attr, None) is None:
+                    setattr(self, _attr, _asyncio.Lock())
             return await _orig_push(self, *a, **kw)
         _gr_q.Queue.push = _safe_push
-        print("✅ Queue.push None-lock guard applied")
+
+        print("✅ Queue all-locks guard applied")
     except Exception as _e:
-        print(f"⚠️  Queue.push patch failed: {_e}")
+        print(f"⚠️  Queue patch failed: {_e}")
 
     # ── Patch 2: Disable is_url_ok health-check ───────────────────────────────
     try:
