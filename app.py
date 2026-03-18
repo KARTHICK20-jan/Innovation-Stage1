@@ -8167,7 +8167,7 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
         step1_title_md = gr.Markdown("# 📝 Register New User\n## Step 1: User Information")
 
         # Tabs for Manual vs Voice input in Step 1
-        with gr.Tabs():
+        with gr.Tabs(selected=0):
             with gr.Tab("⌨️ Manual Entry"):
                 name_input   = gr.Textbox(label="Full Name*", elem_id="step1-name")
                 mobile_input = gr.Textbox(label="Mobile Number*", elem_id="step1-mobile")
@@ -8196,7 +8196,7 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
         step2_title_md = gr.Markdown("## Step 2: MSME Verification")
 
         # Tabs for Manual vs Voice input in Step 2
-        with gr.Tabs():
+        with gr.Tabs(selected=0):
             with gr.Tab("⌨️ Manual Entry"):
                 msme_number_input = gr.Textbox(label="MSME/Udyam Number*", placeholder="e.g., UDYAM-XX-XX-XXXXXXX", elem_id="step2-msme")
                 otp_input         = gr.Textbox(label="OTP (Enter '1234' for demo)*", type="password", elem_id="step2-otp")
@@ -10360,11 +10360,10 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 if __name__ == "__main__":
     import os as _os_launch
     import asyncio as _asyncio
-    import uvicorn as _uvicorn
 
     _port = int(_os_launch.environ.get("PORT", 7860))
 
-    # ── Patch 1: Queue.push None-lock (race condition on Render) ─────────────
+    # ── Patch 1: Queue.push None-lock guard ──────────────────────────────────
     try:
         import gradio.queueing as _gr_q
         _orig_push = _gr_q.Queue.push
@@ -10377,54 +10376,32 @@ if __name__ == "__main__":
     except Exception as _e:
         print(f"⚠️  Queue.push patch failed: {_e}")
 
-    # ── Patch 2: Disable is_url_ok (fails on Render internal network) ────────
+    # ── Patch 2: Disable is_url_ok health-check ───────────────────────────────
     try:
         import gradio.networking as _gr_net
         _gr_net.is_url_ok = lambda *a, **kw: True
     except Exception:
         pass
 
-    # ── Step 1: queue the demo ────────────────────────────────────────────────
-    demo.queue(concurrency_count=2, max_size=20, api_open=False)
+    # ── Patch 3: Monkey-patch uvicorn.run to inject Render-safe config ────────
+    # demo.launch() internally calls uvicorn.run(). We intercept that call to:
+    #   (a) force timeout_keep_alive=75 so SSE stays alive under Render's 90s limit
+    #   (b) wrap the ASGI app in _RenderSSEMiddleware before uvicorn sees it
+    import uvicorn as _uvicorn
 
-    # ── Step 2: build the Gradio FastAPI/ASGI app without starting a server ──
-    # App.create_app() is the internal Gradio 4.x factory — it creates the
-    # FastAPI app, mounts all routes and the queue, but does NOT bind a port.
-    try:
-        from gradio.routes import App as _GrApp
-        # Gradio 4.44.1 signature: create_app(blocks, app_kwargs=None)
-        try:
-            _gr_asgi = _GrApp.create_app(demo, app_kwargs={})
-        except TypeError:
-            _gr_asgi = _GrApp.create_app(demo)
-        print("✅ Gradio ASGI app created via App.create_app()")
-    except Exception as _app_err:
-        print(f"⚠️  App.create_app() failed: {_app_err} — falling back to demo.launch()")
-        # Last-resort fallback: use demo.launch() with prevent_thread_lock
-        # on a side port, then rebind the real port via uvicorn using demo.app
-        import threading as _th, time as _time
-        demo.launch(server_name="127.0.0.1", server_port=7861,
-                    prevent_thread_lock=True, share=False, quiet=True)
-        for _ in range(20):
-            if getattr(demo, "app", None) is not None:
-                break
-            _time.sleep(0.5)
-        _gr_asgi = demo.app
-        print("✅ Gradio ASGI app obtained via demo.app fallback")
-
-    # ── Step 3: ASGI middleware — inject SSE headers on /queue/* ─────────────
-    # Render's nginx proxy will 503 SSE streams unless these headers are set.
     class _RenderSSEMiddleware:
-        """Injects headers that prevent Render's nginx from buffering SSE."""
+        """Injects X-Accel-Buffering:no on /queue/* and /run/* so Render's
+        nginx doesn't buffer or 503 the SSE event streams."""
         def __init__(self, app):
             self.app = app
-
         async def __call__(self, scope, receive, send):
-            if scope["type"] != "http" or "/queue/" not in scope.get("path", ""):
+            path = scope.get("path", "")
+            if scope["type"] != "http" or (
+                "/queue/" not in path and "/run/" not in path
+            ):
                 await self.app(scope, receive, send)
                 return
-
-            async def _patched_send(msg):
+            async def _send_patched(msg):
                 if msg["type"] == "http.response.start":
                     hdrs = [(k, v) for k, v in msg.get("headers", [])
                             if k.lower() not in
@@ -10436,19 +10413,31 @@ if __name__ == "__main__":
                     ]
                     msg = {**msg, "headers": hdrs}
                 await send(msg)
+            await self.app(scope, receive, _send_patched)
 
-            await self.app(scope, receive, _patched_send)
+    _orig_uvicorn_run = _uvicorn.run
+    def _patched_uvicorn_run(app, **kwargs):
+        print(f"✅ uvicorn intercepted — injecting SSE middleware + keep-alive")
+        kwargs["timeout_keep_alive"] = 75
+        kwargs.pop("h11_max_incomplete_event_size", None)   # not valid in all uvicorn versions
+        _orig_uvicorn_run(_RenderSSEMiddleware(app), **kwargs)
+    _uvicorn.run = _patched_uvicorn_run
 
-    _wrapped = _RenderSSEMiddleware(_gr_asgi)
-
-    # ── Step 4: run uvicorn directly with Render-friendly settings ────────────
-    print(f"🚀 Starting uvicorn on 0.0.0.0:{_port}")
-    _uvicorn.run(
-        _wrapped,
-        host="0.0.0.0",
-        port=_port,
-        log_level="info",          # info so Render sees the "Uvicorn running" line
-        access_log=False,
-        timeout_keep_alive=75,     # just under Render's 90s proxy timeout
-        h11_max_incomplete_event_size=16 * 1024,
+    # ── Queue + Launch ─────────────────────────────────────────────────────────
+    # demo.launch() handles everything: queue start, ASGI wiring, uvicorn bind.
+    # We intercept uvicorn.run above so the SSE middleware is always active.
+    demo.queue(
+        concurrency_count=2,
+        max_size=20,
+        api_open=False,
+        status_update_rate=0.5,
+    )
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=_port,
+        show_error=True,
+        share=False,
+        max_threads=40,
+        root_path="",
+        ssl_verify=False,
     )
