@@ -10360,100 +10360,95 @@ with gr.Blocks(title="DataNetra.ai - MSME Intelligence", theme=gr.themes.Soft(),
 if __name__ == "__main__":
     import os as _os_launch
     import asyncio as _asyncio
-    import uvicorn
+    import uvicorn as _uvicorn
 
     _port = int(_os_launch.environ.get("PORT", 7860))
 
-    # ── Fix 1: Queue.push None-lock guard ────────────────────────────────────
+    # ── Patch 1: Queue.push None-lock (race condition on Render) ─────────────
     try:
         import gradio.queueing as _gr_q
         _orig_push = _gr_q.Queue.push
-
         async def _safe_push(self, *a, **kw):
             if getattr(self, "pending_message_lock", None) is None:
                 self.pending_message_lock = _asyncio.Lock()
             return await _orig_push(self, *a, **kw)
-
         _gr_q.Queue.push = _safe_push
         print("✅ Queue.push None-lock guard applied")
-    except Exception as _qe:
-        print(f"ℹ️  Queue.push patch skipped: {_qe}")
+    except Exception as _e:
+        print(f"⚠️  Queue.push patch failed: {_e}")
 
-    # ── Fix 2: Disable is_url_ok pre-flight ──────────────────────────────────
-    for _mod_name in ("gradio.networking", "gradio.blocks"):
-        try:
-            import importlib as _il
-            _mod = _il.import_module(_mod_name)
-            _mod.networking.is_url_ok = lambda *a, **kw: True
-        except Exception:
-            pass
+    # ── Patch 2: Disable is_url_ok (fails on Render internal network) ────────
     try:
         import gradio.networking as _gr_net
         _gr_net.is_url_ok = lambda *a, **kw: True
     except Exception:
         pass
 
-    # ── Fix 3: Build ASGI app with SSE-friendly middleware ────────────────────
-    # Render's proxy closes idle connections. We must:
-    #   • inject "X-Accel-Buffering: no" so nginx doesn't buffer SSE
-    #   • inject "Cache-Control: no-cache" so the proxy doesn't cache SSE
-    #   • run uvicorn directly with h11_max_incomplete_event_size and
-    #     timeout_keep_alive so the connection stays alive
+    # ── Step 1: queue the demo ────────────────────────────────────────────────
+    demo.queue(concurrency_count=2, max_size=20, api_open=False)
 
-    demo.queue(
-        concurrency_count=2,
-        max_size=20,
-        api_open=False,
-    )
+    # ── Step 2: build the Gradio FastAPI/ASGI app without starting a server ──
+    # App.create_app() is the internal Gradio 4.x factory — it creates the
+    # FastAPI app, mounts all routes and the queue, but does NOT bind a port.
+    try:
+        from gradio.routes import App as _GrApp
+        # Gradio 4.44.1 signature: create_app(blocks, app_kwargs=None)
+        try:
+            _gr_asgi = _GrApp.create_app(demo, app_kwargs={})
+        except TypeError:
+            _gr_asgi = _GrApp.create_app(demo)
+        print("✅ Gradio ASGI app created via App.create_app()")
+    except Exception as _app_err:
+        print(f"⚠️  App.create_app() failed: {_app_err} — falling back to demo.launch()")
+        # Last-resort fallback: use demo.launch() with prevent_thread_lock
+        # on a side port, then rebind the real port via uvicorn using demo.app
+        import threading as _th, time as _time
+        demo.launch(server_name="127.0.0.1", server_port=7861,
+                    prevent_thread_lock=True, share=False, quiet=True)
+        for _ in range(20):
+            if getattr(demo, "app", None) is not None:
+                break
+            _time.sleep(0.5)
+        _gr_asgi = demo.app
+        print("✅ Gradio ASGI app obtained via demo.app fallback")
 
-    # Mount the Gradio ASGI app so we can wrap it
-    gradio_app, _, _ = demo.launch(
-        server_name="0.0.0.0",
-        server_port=_port,
-        show_error=True,
-        share=False,
-        max_threads=40,
-        root_path="",
-        ssl_verify=False,
-        prevent_thread_lock=True,   # ← don't block; we drive uvicorn below
-    )
-
-    # Wrap with a lightweight ASGI middleware that injects SSE headers
-    # on every /queue/* response so Render's nginx proxy won't buffer or 503.
-    class _SSEHeaderMiddleware:
+    # ── Step 3: ASGI middleware — inject SSE headers on /queue/* ─────────────
+    # Render's nginx proxy will 503 SSE streams unless these headers are set.
+    class _RenderSSEMiddleware:
+        """Injects headers that prevent Render's nginx from buffering SSE."""
         def __init__(self, app):
             self.app = app
 
         async def __call__(self, scope, receive, send):
-            if scope["type"] == "http" and "/queue/" in scope.get("path", ""):
-                async def _send_with_headers(message):
-                    if message["type"] == "http.response.start":
-                        headers = list(message.get("headers", []))
-                        # Remove any existing conflicting headers
-                        headers = [h for h in headers if h[0].lower() not in
-                                   (b"x-accel-buffering", b"cache-control", b"connection")]
-                        headers += [
-                            (b"x-accel-buffering", b"no"),
-                            (b"cache-control", b"no-cache, no-store"),
-                            (b"connection", b"keep-alive"),
-                            (b"access-control-allow-origin", b"*"),
-                        ]
-                        message = {**message, "headers": headers}
-                    await send(message)
-                await self.app(scope, receive, _send_with_headers)
-            else:
+            if scope["type"] != "http" or "/queue/" not in scope.get("path", ""):
                 await self.app(scope, receive, send)
+                return
 
-    wrapped_app = _SSEHeaderMiddleware(gradio_app)
+            async def _patched_send(msg):
+                if msg["type"] == "http.response.start":
+                    hdrs = [(k, v) for k, v in msg.get("headers", [])
+                            if k.lower() not in
+                            (b"x-accel-buffering", b"cache-control", b"connection")]
+                    hdrs += [
+                        (b"x-accel-buffering", b"no"),
+                        (b"cache-control",     b"no-cache"),
+                        (b"connection",        b"keep-alive"),
+                    ]
+                    msg = {**msg, "headers": hdrs}
+                await send(msg)
 
-    # Run uvicorn directly — this gives us control over timeouts
-    uvicorn.run(
-        wrapped_app,
+            await self.app(scope, receive, _patched_send)
+
+    _wrapped = _RenderSSEMiddleware(_gr_asgi)
+
+    # ── Step 4: run uvicorn directly with Render-friendly settings ────────────
+    print(f"🚀 Starting uvicorn on 0.0.0.0:{_port}")
+    _uvicorn.run(
+        _wrapped,
         host="0.0.0.0",
         port=_port,
-        timeout_keep_alive=120,      # keep SSE connections alive for 2 min
-        timeout_graceful_shutdown=5,
-        h11_max_incomplete_event_size=16 * 1024,
-        log_level="warning",
+        log_level="info",          # info so Render sees the "Uvicorn running" line
         access_log=False,
+        timeout_keep_alive=75,     # just under Render's 90s proxy timeout
+        h11_max_incomplete_event_size=16 * 1024,
     )
