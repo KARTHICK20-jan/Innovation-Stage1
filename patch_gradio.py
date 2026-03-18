@@ -147,46 +147,46 @@ if os.path.exists(routes_path):
     open(routes_path, 'w').writelines(lines)
     delete_pyc(routes_path)
 
+
 # ── Patch 5: gradio/queueing.py ───────────────────────────────────────────────
-# On Render, pending_message_lock is None when the first request hits Queue.push()
-# because Queue.start() (async) hasn't completed yet. This guard auto-creates
-# the lock if missing, preventing:
-#   TypeError: 'NoneType' object does not support the asynchronous context manager protocol
+# Queue.push() does `async with self.pending_message_lock:` but on Render the
+# lock is None when first requests arrive (Queue.start() hasn't run yet).
+# We inject a two-line None-guard at the top of the push method body.
+#
+# Targets the exact text pattern that appears in gradio 4.44.1:
+#   async def push(
+#       self, ...
+#   ) -> ...:
+#       async with self.pending_message_lock:   ← crash if None
 queueing_path = os.path.join(venv_site, 'gradio', 'queueing.py')
 if os.path.exists(queueing_path):
     src = open(queueing_path).read()
-    if 'pending_message_lock", None) is None' not in src:
-        lines = src.splitlines(keepends=True)
-        new_lines = []
-        i = 0
-        patched = False
-        while i < len(lines):
-            new_lines.append(lines[i])
-            stripped = lines[i].lstrip()
-            if stripped.startswith('async def push(') and 'self' in lines[i]:
-                # consume multi-line signature
-                while ')' not in lines[i] and i + 1 < len(lines):
-                    i += 1
-                    new_lines.append(lines[i])
-                # skip blank lines
-                j = i + 1
-                while j < len(lines) and not lines[j].strip():
-                    new_lines.append(lines[j])
-                    j += 1
-                body_ind = lines[j][:len(lines[j]) - len(lines[j].lstrip())] if j < len(lines) else '        '
-                new_lines.append(body_ind + 'import asyncio as _asyncio_q\n')
-                new_lines.append(body_ind + 'if getattr(self, "pending_message_lock", None) is None:\n')
-                new_lines.append(body_ind + '    self.pending_message_lock = _asyncio_q.Lock()\n')
-                i = j
-                patched = True
-                continue
-            i += 1
-        if patched:
-            open(queueing_path, 'w').writelines(new_lines)
-            delete_pyc(queueing_path)
-            print("✅ queueing.py pending_message_lock None-guard inserted")
+    GUARD = 'if getattr(self, "pending_message_lock", None) is None:'
+    if GUARD not in src:
+        # Find the first `async with self.pending_message_lock:` and inject
+        # the guard immediately before it (preserving indentation).
+        TARGET = 'async with self.pending_message_lock:'
+        if TARGET in src:
+            lines = src.splitlines(keepends=True)
+            new_lines = []
+            patched = False
+            for line in lines:
+                stripped = line.lstrip()
+                if not patched and stripped.startswith(TARGET):
+                    ind = line[:len(line) - len(stripped)]
+                    new_lines.append(ind + 'import asyncio as _asyncio_q\n')
+                    new_lines.append(ind + GUARD + '\n')
+                    new_lines.append(ind + '    self.pending_message_lock = _asyncio_q.Lock()\n')
+                    patched = True
+                new_lines.append(line)
+            if patched:
+                open(queueing_path, 'w').writelines(new_lines)
+                delete_pyc(queueing_path)
+                print("✅ queueing.py pending_message_lock None-guard inserted")
+            else:
+                print("ℹ️  queueing.py TARGET line not found after scan — skipping")
         else:
-            print("ℹ️  queueing.py push() signature not found — skipping")
+            print("ℹ️  queueing.py: async with self.pending_message_lock not found — skipping")
     else:
         print("ℹ️  queueing.py already patched")
 else:
