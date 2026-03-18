@@ -10363,44 +10363,40 @@ if __name__ == "__main__":
 
     _port = int(_os_launch.environ.get("PORT", 7860))
 
-    # ── Fix: Gradio 4.44.1 queueing.py race on Render ────────────────────────
-    # pending_message_lock is None until Queue.start() fires its async init,
-    # but Render routes traffic before that completes → TypeError on push().
-    # Patch Queue.__init__ to eagerly create the lock in the correct event loop.
+    # ── Fix: Gradio 4.44.1 queueing.py — pending_message_lock race on Render ──
+    # Queue.push() does `async with self.pending_message_lock` but the lock is
+    # initialised inside Queue.start() which is an async coroutine.  On Render
+    # the proxy sends the first HTTP request before the event-loop has had a
+    # chance to call start(), so the lock is still None → TypeError.
+    #
+    # Patch Queue.push at the *class* level so that if the lock is None it is
+    # created lazily inside the already-running event loop.
     try:
-        import gradio.queueing as _gr_queueing
-        _orig_queue_init = _gr_queueing.Queue.__init__
+        import gradio.queueing as _gr_q
+        _orig_push = _gr_q.Queue.push
 
-        def _patched_queue_init(self, *args, **kwargs):
-            _orig_queue_init(self, *args, **kwargs)
-            # Ensure lock exists immediately; will be replaced by start() if needed
-            if getattr(self, "pending_message_lock", None) is None:
-                try:
-                    self.pending_message_lock = _asyncio.Lock()
-                except RuntimeError:
-                    # No running event loop yet — create a placeholder that
-                    # will be overwritten when the loop starts
-                    pass
-
-        _gr_queueing.Queue.__init__ = _patched_queue_init
-        print("✅ queueing.py pending_message_lock race-condition fix applied")
-    except Exception as _e:
-        print(f"ℹ️  queueing patch skipped: {_e}")
-
-    # ── Also patch Queue.push to guard against None lock ─────────────────────
-    try:
-        import gradio.queueing as _gr_queueing2
-        _orig_push = _gr_queueing2.Queue.push
-
-        async def _safe_push(self, *args, **kwargs):
+        async def _safe_push(self, *a, **kw):
             if getattr(self, "pending_message_lock", None) is None:
                 self.pending_message_lock = _asyncio.Lock()
-            return await _orig_push(self, *args, **kwargs)
+            return await _orig_push(self, *a, **kw)
 
-        _gr_queueing2.Queue.push = _safe_push
-        print("✅ queueing.py Queue.push None-lock guard applied")
-    except Exception as _e:
-        print(f"ℹ️  queue push patch skipped: {_e}")
+        _gr_q.Queue.push = _safe_push
+        print("✅ Queue.push None-lock guard applied")
+    except Exception as _qe:
+        print(f"ℹ️  Queue.push patch skipped: {_qe}")
+
+    # ── Fix: Gradio SSE "Server stopped unexpectedly" on Render proxy ─────────
+    # Disable is_url_ok pre-flight that fails on Render's internal network.
+    try:
+        import gradio.networking as _gr_net
+        _gr_net.is_url_ok = lambda *a, **kw: True
+    except Exception:
+        pass
+    try:
+        import gradio.blocks as _gr_blk
+        _gr_blk.networking.is_url_ok = lambda *a, **kw: True
+    except Exception:
+        pass
 
     demo.queue(
         concurrency_count=2,
@@ -10415,4 +10411,5 @@ if __name__ == "__main__":
         max_threads=40,
         root_path="",
         ssl_verify=False,
+        prevent_thread_lock=False,
     )
