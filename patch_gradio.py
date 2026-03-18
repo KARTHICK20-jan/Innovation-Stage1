@@ -148,47 +148,69 @@ if os.path.exists(routes_path):
     delete_pyc(routes_path)
 
 
-# ── Patch 5: gradio/queueing.py ───────────────────────────────────────────────
-# Queue.push() does `async with self.pending_message_lock:` but on Render the
-# lock is None when first requests arrive (Queue.start() hasn't run yet).
-# We inject a two-line None-guard at the top of the push method body.
+# ── Patch 5: gradio/queueing.py — ALL async locks/events ─────────────────────
+# Queue.__init__ sets ALL async primitives to None (Lock, Event, etc.).
+# They are only created inside Queue.start() which runs as an async coroutine
+# AFTER the server starts. On Render, requests arrive before start() completes,
+# causing TypeError: 'NoneType' does not support the asynchronous context manager.
 #
-# Targets the exact text pattern that appears in gradio 4.44.1:
-#   async def push(
-#       self, ...
-#   ) -> ...:
-#       async with self.pending_message_lock:   ← crash if None
+# Known None attributes in gradio 4.44.1 Queue:
+#   pending_message_lock, delete_lock, server_app (and possibly others)
+#
+# Strategy: Scan queueing.py for EVERY pattern of the form
+#   `async with self.<attr>:` or `await self.<attr>.wait()`
+# and inject a guard before each one that creates the primitive if None.
+
 queueing_path = os.path.join(venv_site, 'gradio', 'queueing.py')
 if os.path.exists(queueing_path):
     src = open(queueing_path).read()
-    GUARD = 'if getattr(self, "pending_message_lock", None) is None:'
-    if GUARD not in src:
-        # Find the first `async with self.pending_message_lock:` and inject
-        # the guard immediately before it (preserving indentation).
-        TARGET = 'async with self.pending_message_lock:'
-        if TARGET in src:
-            lines = src.splitlines(keepends=True)
-            new_lines = []
-            patched = False
-            for line in lines:
-                stripped = line.lstrip()
-                if not patched and stripped.startswith(TARGET):
-                    ind = line[:len(line) - len(stripped)]
-                    new_lines.append(ind + 'import asyncio as _asyncio_q\n')
-                    new_lines.append(ind + GUARD + '\n')
-                    new_lines.append(ind + '    self.pending_message_lock = _asyncio_q.Lock()\n')
-                    patched = True
-                new_lines.append(line)
-            if patched:
-                open(queueing_path, 'w').writelines(new_lines)
-                delete_pyc(queueing_path)
-                print("✅ queueing.py pending_message_lock None-guard inserted")
-            else:
-                print("ℹ️  queueing.py TARGET line not found after scan — skipping")
-        else:
-            print("ℹ️  queueing.py: async with self.pending_message_lock not found — skipping")
+
+    if '# RENDER_ALL_LOCKS_PATCHED' not in src:
+        import re as _re
+
+        lines = src.splitlines(keepends=True)
+        new_lines = []
+        patch_count = 0
+
+        for line in lines:
+            stripped = line.lstrip()
+            ind = line[:len(line) - len(stripped)]
+
+            # Pattern 1: `async with self.<attr>:` → Lock guard
+            m = _re.match(r'async with self\.(\w+):', stripped)
+            if m:
+                attr = m.group(1)
+                new_lines.append(ind + f'if getattr(self, "{attr}", None) is None:\n')
+                new_lines.append(ind + f'    import asyncio as _aq; self.{attr} = _aq.Lock()\n')
+                patch_count += 1
+
+            # Pattern 2: `await self.<attr>.wait()` → Event guard
+            m2 = _re.match(r'await self\.(\w+)\.wait\(\)', stripped)
+            if m2:
+                attr = m2.group(1)
+                new_lines.append(ind + f'if getattr(self, "{attr}", None) is None:\n')
+                new_lines.append(ind + f'    import asyncio as _aq; self.{attr} = _aq.Event()\n')
+                patch_count += 1
+
+            # Pattern 3: `await self.<attr>.set()` or `.clear()` → Event guard
+            m3 = _re.match(r'(?:await )?self\.(\w+)\.(set|clear)\(\)', stripped)
+            if m3:
+                attr = m3.group(1)
+                new_lines.append(ind + f'if getattr(self, "{attr}", None) is None:\n')
+                new_lines.append(ind + f'    import asyncio as _aq; self.{attr} = _aq.Event()\n')
+                patch_count += 1
+
+            new_lines.append(line)
+
+        # Add sentinel so we don't double-patch
+        new_lines.insert(0, '# RENDER_ALL_LOCKS_PATCHED\n')
+
+        open(queueing_path, 'w').writelines(new_lines)
+        delete_pyc(queueing_path)
+        print(f"✅ queueing.py: {patch_count} async primitive guards inserted")
     else:
-        print("ℹ️  queueing.py already patched")
+        print("ℹ️  queueing.py already fully patched")
 else:
     print("ℹ️  queueing.py not found — skipping")
+
 print("All patches done.")
