@@ -147,4 +147,49 @@ if os.path.exists(routes_path):
     open(routes_path, 'w').writelines(lines)
     delete_pyc(routes_path)
 
+# ── Patch 5: gradio/queueing.py ───────────────────────────────────────────────
+# On Render, pending_message_lock is None when the first request hits Queue.push()
+# because Queue.start() (async) hasn't completed yet. This guard auto-creates
+# the lock if missing, preventing:
+#   TypeError: 'NoneType' object does not support the asynchronous context manager protocol
+queueing_path = os.path.join(venv_site, 'gradio', 'queueing.py')
+if os.path.exists(queueing_path):
+    src = open(queueing_path).read()
+    if 'pending_message_lock", None) is None' not in src:
+        lines = src.splitlines(keepends=True)
+        new_lines = []
+        i = 0
+        patched = False
+        while i < len(lines):
+            new_lines.append(lines[i])
+            stripped = lines[i].lstrip()
+            if stripped.startswith('async def push(') and 'self' in lines[i]:
+                # consume multi-line signature
+                while ')' not in lines[i] and i + 1 < len(lines):
+                    i += 1
+                    new_lines.append(lines[i])
+                # skip blank lines
+                j = i + 1
+                while j < len(lines) and not lines[j].strip():
+                    new_lines.append(lines[j])
+                    j += 1
+                body_ind = lines[j][:len(lines[j]) - len(lines[j].lstrip())] if j < len(lines) else '        '
+                new_lines.append(body_ind + 'import asyncio as _asyncio_q\n')
+                new_lines.append(body_ind + 'if getattr(self, "pending_message_lock", None) is None:\n')
+                new_lines.append(body_ind + '    self.pending_message_lock = _asyncio_q.Lock()\n')
+                i = j
+                patched = True
+                continue
+            i += 1
+        if patched:
+            open(queueing_path, 'w').writelines(new_lines)
+            delete_pyc(queueing_path)
+            print("✅ queueing.py pending_message_lock None-guard inserted")
+        else:
+            print("ℹ️  queueing.py push() signature not found — skipping")
+    else:
+        print("ℹ️  queueing.py already patched")
+else:
+    print("ℹ️  queueing.py not found — skipping")
+
 print("All patches done.")
