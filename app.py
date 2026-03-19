@@ -2271,7 +2271,7 @@ def generate_insights(user_data, df_raw, lang='en'):
             f'<div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid {_snp_trend_col}">'
             '<div style="font-size:10px;color:#4A6A8A;text-transform:uppercase;letter-spacing:0.8px">Revenue Trend (6-Month)</div>'
             f'<div style="font-size:15px;font-weight:700;color:{_snp_trend_col};margin-top:2px">{_snp_growth_rate:+.1f}%</div>'
-            f'<div style="font-size:10px;color:#4A6A8A">Forecast vs trailing 6 months{_snp_sep}</div>'
+            f'<div style="font-size:10px;color:#4A6A8A">Forecast vs trailing 6 months{_snp_peak_line}</div>'
             '</div>'
             '<div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #8b5cf6">'
             '<div style="font-size:10px;color:#4A6A8A;text-transform:uppercase;letter-spacing:0.8px">Forecast Model</div>'
